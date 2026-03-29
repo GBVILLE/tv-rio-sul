@@ -1,48 +1,52 @@
 import os
-import time
+import asyncio
 from flask import Flask, redirect
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
+from playwright.async_api import async_playwright
 
 app = Flask(__name__)
 
-def capturar_m3u8():
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    
-    # Injeta Barra Mansa via GPS
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-    params = {"latitude": -22.5442, "longitude": -44.1736, "accuracy": 100}
-    driver.execute_cdp_cmd("Emulation.setGeolocationOverride", params)
+async def get_stream_url():
+    async with async_playwright() as p:
+        # Abre o navegador em modo invisível
+        browser = await p.chromium.launch(headless=True)
+        # Configura as coordenadas de Barra Mansa e permissão de GPS
+        context = await browser.new_context(
+            permissions=['geolocation'],
+            geolocation={'latitude': -22.5442, 'longitude': -44.1736},
+            viewport={'width': 1280, 'height': 720}
+        )
+        page = await context.new_page()
 
-    try:
-        driver.get("https://globoplay.globo.com/tv-globo/ao-vivo/7832875/")
-        time.sleep(15) # Tempo para o token ser gerado
-        
-        # O Bot vasculha o tráfego de rede em busca do arquivo .m3u8
-        logs = driver.get_log('performance')
-        for entry in logs:
-            if '.m3u8' in entry['message'] and 'playlist' in entry['message']:
-                import json
-                log = json.loads(entry['message'])['message']
-                url = log['params'].get('request', {}).get('url')
-                if url: return url
-        return driver.current_url # Fallback se não achar o bruto
-    except:
-        return None
-    finally:
-        driver.quit()
+        stream_url = []
+
+        # Monitora o tráfego de rede para capturar o link .m3u8
+        page.on("request", lambda request: stream_url.append(request.url) if ".m3u8" in request.url and "playlist" in request.url else None)
+
+        try:
+            # ID da TV Rio Sul que você passou
+            await page.goto("https://globoplay.globo.com/tv-globo/ao-vivo/7832875/", wait_until="networkidle", timeout=60000)
+            await asyncio.sleep(15) # Tempo para o player carregar o sinal
+            
+            # Filtra os links capturados para pegar o mais provável
+            for url in stream_url:
+                if "live" in url or "playback" in url:
+                    return url
+            return stream_url[0] if stream_url else None
+        except:
+            return None
+        finally:
+            await browser.close()
 
 @app.route('/riosul.m3u8')
-def streaming():
-    link_real = capturar_m3u8()
-    if link_real:
-        return redirect(link_real)
-    return "Erro ao extrair sinal", 500
+def riosul():
+    # Executa a função assíncrona para pegar o link
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    link = loop.run_until_complete(get_stream_url())
+    
+    if link:
+        return redirect(link)
+    return "Erro ao extrair sinal. Verifique se a conta está logada.", 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
