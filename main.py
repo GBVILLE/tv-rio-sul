@@ -1,43 +1,48 @@
 import os
 import asyncio
-from flask import Flask, Response, redirect
+from flask import Flask, redirect
 from playwright.async_api import async_playwright
 
 app = Flask(__name__)
 
 async def get_raw_token_url():
     async with async_playwright() as p:
-        # Launch otimizado para o Render
+        # Launch com argumentos para economizar MUITA RAM
         browser = await p.chromium.launch(
             headless=True, 
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+            args=[
+                "--no-sandbox", 
+                "--disable-setuid-sandbox", 
+                "--disable-dev-shm-usage", 
+                "--disable-accelerated-2d-canvas",
+                "--disable-gpu",
+                "--no-first-run",
+                "--no-zygote",
+                "--single-process" # Ajuda a manter tudo em um processo só
+            ]
         )
         
-        # GPS de Barra Mansa
         context = await browser.new_context(
             permissions=['geolocation'],
             geolocation={'latitude': -22.5442, 'longitude': -44.1736},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
         )
         
-        # Puxa as duas chaves do Render
+        # Bloqueio de imagens e CSS para economizar memória
+        page = await context.new_page()
+        await page.route("**/*.{png,jpg,jpeg,gif,svg,css,woff,woff2,pdf}", lambda route: route.abort())
+
         glb_id = os.environ.get("GLB_COOKIE")
         glbid = os.environ.get("GLBID_VAL")
         
-        # Injeta os dois Cookies principais
         cookies = []
-        if glb_id:
-            cookies.append({'name': 'GLOBO_ID', 'value': glb_id, 'domain': '.globo.com', 'path': '/'})
-        if glbid:
-            cookies.append({'name': 'GLBID', 'value': glbid, 'domain': '.globo.com', 'path': '/'})
+        if glb_id: cookies.append({'name': 'GLOBO_ID', 'value': glb_id, 'domain': '.globo.com', 'path': '/'})
+        if glbid: cookies.append({'name': 'GLBID', 'value': glbid, 'domain': '.globo.com', 'path': '/'})
         
-        if cookies:
-            await context.add_cookies(cookies)
+        if cookies: await context.add_cookies(cookies)
 
-        page = await context.new_page()
         found = {"url": None}
 
-        # Intercepta o link do vídeo
         async def handle_request(request):
             if ".m3u8" in request.url and "/j/" in request.url:
                 found["url"] = request.url
@@ -45,11 +50,10 @@ async def get_raw_token_url():
         page.on("request", handle_request)
 
         try:
-            # Vai direto para o canal
-            await page.goto("https://globoplay.globo.com/tv-globo/ao-vivo/7832875/", wait_until="domcontentloaded", timeout=60000)
+            # Tempo de timeout menor para não estourar a memória esperando demais
+            await page.goto("https://globoplay.globo.com/tv-globo/ao-vivo/7832875/", wait_until="commit", timeout=45000)
             
-            # Espera o link aparecer
-            for _ in range(25):
+            for _ in range(15):
                 if found["url"]: break
                 await asyncio.sleep(1)
             
@@ -69,9 +73,9 @@ def proxy():
         
         if token_link:
             return redirect(token_link)
-        return "Sinal não encontrado. Verifique se os Cookies no Render estão corretos.", 404
+        return "Sinal não encontrado ou timeout de memória.", 404
     except Exception as e:
-        return f"Erro interno: {str(e)}", 500
+        return f"Erro: {str(e)}", 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
