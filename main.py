@@ -6,41 +6,33 @@ from playwright.async_api import async_playwright
 app = Flask(__name__)
 
 async def get_raw_token_url():
+    # Pega o Token do Browserless que você salvou no Render
+    browserless_token = os.environ.get("BROWSERLESS_TOKEN")
+    ws_endpoint = f"wss://chrome.browserless.io?token={browserless_token}"
+
     async with async_playwright() as p:
-        # Launch com argumentos para economizar MUITA RAM
-        browser = await p.chromium.launch(
-            headless=True, 
-            args=[
-                "--no-sandbox", 
-                "--disable-setuid-sandbox", 
-                "--disable-dev-shm-usage", 
-                "--disable-accelerated-2d-canvas",
-                "--disable-gpu",
-                "--no-first-run",
-                "--no-zygote",
-                "--single-process" # Ajuda a manter tudo em um processo só
-            ]
-        )
+        # CONEXÃO REMOTA: O Chrome roda lá no Browserless, não no Render!
+        try:
+            browser = await p.chromium.connect_over_cdp(ws_endpoint)
+        except Exception as e:
+            print(f"Erro ao conectar no Browserless: {e}")
+            return None
         
         context = await browser.new_context(
             permissions=['geolocation'],
             geolocation={'latitude': -22.5442, 'longitude': -44.1736},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         
-        # Bloqueio de imagens e CSS para economizar memória
-        page = await context.new_page()
-        await page.route("**/*.{png,jpg,jpeg,gif,svg,css,woff,woff2,pdf}", lambda route: route.abort())
-
+        # Injeta seus Cookies
         glb_id = os.environ.get("GLB_COOKIE")
         glbid = os.environ.get("GLBID_VAL")
-        
         cookies = []
         if glb_id: cookies.append({'name': 'GLOBO_ID', 'value': glb_id, 'domain': '.globo.com', 'path': '/'})
         if glbid: cookies.append({'name': 'GLBID', 'value': glbid, 'domain': '.globo.com', 'path': '/'})
-        
         if cookies: await context.add_cookies(cookies)
 
+        page = await context.new_page()
         found = {"url": None}
 
         async def handle_request(request):
@@ -50,10 +42,10 @@ async def get_raw_token_url():
         page.on("request", handle_request)
 
         try:
-            # Tempo de timeout menor para não estourar a memória esperando demais
-            await page.goto("https://globoplay.globo.com/tv-globo/ao-vivo/7832875/", wait_until="commit", timeout=45000)
+            # Vai para o canal (o Browserless aguenta o tranco)
+            await page.goto("https://globoplay.globo.com/tv-globo/ao-vivo/7832875/", wait_until="networkidle", timeout=60000)
             
-            for _ in range(15):
+            for _ in range(20):
                 if found["url"]: break
                 await asyncio.sleep(1)
             
@@ -73,9 +65,9 @@ def proxy():
         
         if token_link:
             return redirect(token_link)
-        return "Sinal não encontrado ou timeout de memória.", 404
+        return "Erro: O navegador remoto não encontrou o sinal.", 404
     except Exception as e:
-        return f"Erro: {str(e)}", 500
+        return f"Erro no servidor: {str(e)}", 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
