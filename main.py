@@ -1,53 +1,73 @@
 import os
 import asyncio
-from flask import Flask, redirect
+from flask import Flask, Response, redirect
 from playwright.async_api import async_playwright
 
 app = Flask(__name__)
 
-async def get_stream_url():
+async def get_raw_token_url():
     async with async_playwright() as p:
-        # Abre o navegador em modo invisível
-        browser = await p.chromium.launch(headless=True)
-        # Configura as coordenadas de Barra Mansa e permissão de GPS
+        # Launch com argumentos para economizar memória no Render
+        browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"])
+        
+        # Configura o GPS de Barra Mansa
         context = await browser.new_context(
             permissions=['geolocation'],
             geolocation={'latitude': -22.5442, 'longitude': -44.1736},
-            viewport={'width': 1280, 'height': 720}
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
         )
+        
+        # Injeta o seu GLOBO_ID
+        cookie_value = os.environ.get("GLB_COOKIE")
+        if cookie_value:
+            await context.add_cookies([{
+                'name': 'GLOBO_ID',
+                'value': cookie_value,
+                'domain': '.globo.com',
+                'path': '/'
+            }])
+
         page = await context.new_page()
+        found = {"url": None}
 
-        stream_url = []
+        # Intercepta o tráfego de rede buscando o link /j/ (Token)
+        async def handle_request(request):
+            if ".m3u8" in request.url and "/j/" in request.url:
+                found["url"] = request.url
 
-        # Monitora o tráfego de rede para capturar o link .m3u8
-        page.on("request", lambda request: stream_url.append(request.url) if ".m3u8" in request.url and "playlist" in request.url else None)
+        page.on("request", handle_request)
 
         try:
-            # ID da TV Rio Sul que você passou
-            await page.goto("https://globoplay.globo.com/tv-globo/ao-vivo/7832875/", wait_until="networkidle", timeout=60000)
-            await asyncio.sleep(15) # Tempo para o player carregar o sinal
+            # Tenta carregar a página da Rio Sul
+            # Usamos 'commit' em vez de 'networkidle' para ser mais rápido
+            await page.goto("https://globoplay.globo.com/tv-globo/ao-vivo/7832875/", wait_until="domcontentloaded", timeout=45000)
             
-            # Filtra os links capturados para pegar o mais provável
-            for url in stream_url:
-                if "live" in url or "playback" in url:
-                    return url
-            return stream_url[0] if stream_url else None
-        except:
+            # Espera curta para o player disparar o link do vídeo
+            for _ in range(15):
+                if found["url"]: break
+                await asyncio.sleep(1)
+            
+            return found["url"]
+        except Exception as e:
+            print(f"Erro no bot: {e}")
             return None
         finally:
             await browser.close()
 
 @app.route('/riosul.m3u8')
-def riosul():
-    # Executa a função assíncrona para pegar o link
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    link = loop.run_until_complete(get_stream_url())
-    
-    if link:
-        return redirect(link)
-    return "Erro ao extrair sinal. Verifique se a conta está logada.", 500
+def proxy():
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        token_link = loop.run_until_complete(get_raw_token_url())
+        
+        if token_link:
+            # REDIRECIONA para o link bruto (melhor para players de IPTV)
+            return redirect(token_link)
+        return "Sinal não encontrado. Verifique se o GLOBO_ID ainda é válido.", 404
+    except Exception as e:
+        return f"Erro interno: {str(e)}", 500
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
