@@ -1,69 +1,48 @@
 import os
-import asyncio
-from flask import Flask, redirect
-from playwright.async_api import async_playwright
+import requests
+from flask import Flask, redirect, Response
 
 app = Flask(__name__)
 
-async def get_raw_token_url():
-    browserless_token = os.environ.get("BROWSERLESS_TOKEN")
-    user = os.environ.get("GLOBO_USER")
-    password = os.environ.get("GLOBO_PASS")
+# Configurações vindas do seu Environment no Render
+GLOBO_ID = os.environ.get("GLB_COOKIE")
+GLBID = os.environ.get("GLBID_VAL")
+
+def get_live_link():
+    # Endpoint da API de Playback da Globo para a TV Rio Sul
+    # O ID 7832875 é o código interno da Rio Sul no Globoplay
+    api_url = "https://playback.video.globo.com/v1/videos/7832875/details"
     
-    ws_endpoint = f"wss://chrome.browserless.io?token={browserless_token}"
+    headers = {
+        "Cookie": f"GLOBO_ID={GLOBO_ID}; GLBID={GLBID};",
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    }
 
-    async with async_playwright() as p:
-        browser = await p.chromium.connect_over_cdp(ws_endpoint)
-        # Forçamos uma janela maior para o layout de login aparecer corretamente
-        context = await browser.new_context(
-            viewport={'width': 1280, 'height': 720},
-            permissions=['geolocation'],
-            geolocation={'latitude': -22.5442, 'longitude': -44.1736},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        )
+    try:
+        # 1. Pedimos os detalhes do vídeo para a API
+        response = requests.get(api_url, headers=headers, timeout=10)
+        data = response.json()
         
-        page = await context.new_page()
-        found = {"url": None}
-
-        async def handle_request(request):
-            if ".m3u8" in request.url and "/j/" in request.url:
-                found["url"] = request.url
-
-        page.on("request", handle_request)
-
-        try:
-            # 1. Vai para a página de login
-            await page.goto("https://login.globo.com/login/438", wait_until="networkidle")
-            
-            # 2. Preenche e-mail e senha
-            await page.fill("input[name='login']", user)
-            await page.fill("input[name='password']", password)
-            await page.click("button[type='submit']")
-            
-            # 3. Espera o login processar e vai para o canal
-            await page.wait_for_timeout(5000) 
-            await page.goto("https://globoplay.globo.com/tv-globo/ao-vivo/7832875/", wait_until="networkidle")
-            
-            # 4. Espera o link do vídeo aparecer nos requests
-            for _ in range(30):
-                if found["url"]: break
-                await asyncio.sleep(1)
-            
-            return found["url"]
-        except Exception as e:
-            print(f"Erro na automação: {e}")
-            return None
-        finally:
-            await browser.close()
+        # 2. Extraímos o link de transmissão (m3u8)
+        # A API retorna várias opções, pegamos a principal de live
+        for entry in data.get("entrypoints", []):
+            if "playlist.m3u8" in entry:
+                return entry
+        
+        return None
+    except Exception as e:
+        print(f"Erro ao pescar link: {e}")
+        return None
 
 @app.route('/riosul.m3u8')
 def proxy():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    token_link = loop.run_until_complete(get_raw_token_url())
-    if token_link:
-        return redirect(token_link)
-    return "Erro: Não foi possível logar ou encontrar o sinal automaticamente.", 404
+    link = get_live_link()
+    if link:
+        # Redireciona para o link fresco gerado pela API
+        return redirect(link)
+    else:
+        return "Erro: Cookies expirados ou API da Globo mudou.", 403
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
