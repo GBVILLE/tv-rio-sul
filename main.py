@@ -1,48 +1,55 @@
 import os
 import requests
-from flask import Flask, redirect, Response
+from flask import Flask, redirect
 
 app = Flask(__name__)
 
-# Configurações vindas do seu Environment no Render
-GLOBO_ID = os.environ.get("GLB_COOKIE")
-GLBID = os.environ.get("GLBID_VAL")
-
 def get_live_link():
-    # Endpoint da API de Playback da Globo para a TV Rio Sul
-    # O ID 7832875 é o código interno da Rio Sul no Globoplay
-    api_url = "https://playback.video.globo.com/v1/videos/7832875/details"
+    # ID da TV Rio Sul no Globoplay
+    video_id = "7832875"
+    api_url = f"https://playback.video.globo.com/v1/videos/{video_id}/details"
+    
+    # Puxa os cookies que voce colou no Render
+    glb_id = os.environ.get("GLB_COOKIE")
+    glbid = os.environ.get("GLBID_VAL")
     
     headers = {
-        "Cookie": f"GLOBO_ID={GLOBO_ID}; GLBID={GLBID};",
+        "Cookie": f"GLOBO_ID={glb_id}; GLBID={glbid};",
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
 
     try:
-        # 1. Pedimos os detalhes do vídeo para a API
+        # Faz a requisição direta para a API de Playback da Globo
         response = requests.get(api_url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            print(f"Erro na API Globo: {response.status_code}")
+            return None
+            
         data = response.json()
         
-        # 2. Extraímos o link de transmissão (m3u8)
-        # A API retorna várias opções, pegamos a principal de live
-        for entry in data.get("entrypoints", []):
-            if "playlist.m3u8" in entry:
-                return entry
+        # Procura o link de manifesto m3u8 nos pontos de entrada
+        entrypoints = data.get("entrypoints", [])
+        for link in entrypoints:
+            if "playlist.m3u8" in link:
+                return link
         
         return None
     except Exception as e:
-        print(f"Erro ao pescar link: {e}")
+        print(f"Erro no script: {e}")
         return None
 
 @app.route('/riosul.m3u8')
 def proxy():
     link = get_live_link()
     if link:
-        # Redireciona para o link fresco gerado pela API
+        # Redireciona sua TV para o link fresco com o Token JWT
         return redirect(link)
-    else:
-        return "Erro: Cookies expirados ou API da Globo mudou.", 403
+    return "Erro: Cookies expirados ou sinal indisponivel. Atualize o GLOBO_ID no Render.", 403
+
+@app.route('/')
+def home():
+    return "Bot TV Rio Sul Online - Use /riosul.m3u8"
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
