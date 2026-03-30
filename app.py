@@ -33,11 +33,13 @@ def proxy_globo_res():
         "version": 2
     }
     
-    headers = {
+headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Content-Type': 'application/json',
         'Referer': 'https://globoplay.globo.com/',
-        'Origin': 'https://globoplay.globo.com'
+        'Origin': 'https://globoplay.globo.com',
+        'X-Forwarded-For': '177.71.182.114', # IP da Sumicity em Barra Mansa que mapeamos antes
+        'True-Client-IP': '177.71.182.114'
     }
 
     try:
