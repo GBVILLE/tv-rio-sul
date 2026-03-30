@@ -4,14 +4,13 @@ from flask import Flask, redirect, Response
 
 app = Flask(__name__)
 
-# Token extraído do Middleware de Resposta
+# Token de Sessão (Mantenha sincronizado com o horário de Brasília UTC-3)
 GLBID = '15bb8cfbffddc9e02868eb40619b4d57544694c753876437335656751364244316e48635336416d5f3062794434686f61596d393575566f477957397a6b586a705249586d366b4a4e61736b5849627536526f7a356e72766f61526f444b4a4f695a4a784159513d3d3a303a75747171726d3831757977787373676f76657232'
 
 @app.route('/live/globo-res.m3u8')
 def proxy_globo_res():
     auth_api = "https://playback.video.globo.com/v5/video-session"
     
-    # Payload de Auditoria Técnica Exaustiva
     payload = {
         "player_type": "desktop",
         "video_id": "4452349",
@@ -33,12 +32,12 @@ def proxy_globo_res():
         "version": 2
     }
     
-headers = {
+    headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Content-Type': 'application/json',
         'Referer': 'https://globoplay.globo.com/',
         'Origin': 'https://globoplay.globo.com',
-        'X-Forwarded-For': '177.71.182.114', # IP da Sumicity em Barra Mansa que mapeamos antes
+        'X-Forwarded-For': '177.71.182.114',
         'True-Client-IP': '177.71.182.114'
     }
 
@@ -55,6 +54,5 @@ headers = {
         return Response(f"Erro na Bridge: {str(e)}", status=500)
 
 if __name__ == '__main__':
-    # Configuração de Porta Dinâmica para Deploys em Nuvem (Render/Heroku)
     port = int(os.environ.get('PORT', 5080))
     app.run(host='0.0.0.0', port=port, threaded=True)
